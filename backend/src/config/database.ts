@@ -2,12 +2,31 @@ import { Pool } from 'pg';
 import path from 'path';
 import fs from 'fs';
 
+function parseDbSsl(): false | { rejectUnauthorized: false } {
+  const sslSetting = (process.env.DB_SSL || '').toLowerCase();
+  const shouldUseSsl = sslSetting === 'true' || sslSetting === '1' || sslSetting === 'require';
+
+  if (!shouldUseSsl) {
+    return false;
+  }
+
+  return { rejectUnauthorized: false };
+}
+
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'toplis_logistics',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
+  ...(process.env.DATABASE_URL
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: parseDbSsl(),
+      }
+    : {
+        host: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || '5432'),
+        database: process.env.DB_NAME || 'toplis_logistics',
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres',
+        ssl: parseDbSsl(),
+      }),
 });
 
 export async function runMigrations(): Promise<void> {

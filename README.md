@@ -397,6 +397,8 @@ Socket events prepared for future implementation:
 
 ## 🚢 Production Deployment
 
+For a free-tier deployment path (Neon + Render + Cloudflare Pages), see `docs/FREE_HOSTING.md`.
+
 ### Pre-deployment Checklist
 
 1. **Environment Variables**
