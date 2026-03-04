@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: toplis-postgres
+    environment:
+      POSTGRES_DB: toplis_logistics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - toplis-network
+
+  # MinIO (S3-compatible storage for dev)
+  minio:
+    image: minio/minio:latest
+    container_name: toplis-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    command: minio server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - toplis-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: toplis-backend
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: toplis_logistics
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: toplis-docs
+      USE_MINIO: 'true'
+    ports:
+      - '5000:5000'
+    depends_on:
+      - postgres
+      - minio
+    networks:
+      - toplis-network
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: toplis-frontend
+    ports:
+      - '3000:80'
+    depends_on:
+      - backend
+    networks:
+      - toplis-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  toplis-network:
+    driver: bridge

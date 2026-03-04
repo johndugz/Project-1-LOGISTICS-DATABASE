@@ -1,0 +1,268 @@
+{
+  "info": {
+    "name": "TOPLIS Logistics API",
+    "description": "Forwarding Automation MVP - API Endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@toplis.com\",\n  \"password\": \"password\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"phone\": \"+63917123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Register User (Admin only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newuser@toplis.com\",\n  \"password\": \"securepassword123\",\n  \"firstName\": \"New\",\n  \"lastName\": \"User\",\n  \"role\": \"operator\",\n  \"region\": \"NCR\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "register"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bookings",
+      "item": [
+        {
+          "name": "Create Booking",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipperName\": \"ABC Corporation\",\n  \"shipperAddress\": \"123 Business St, Manila\",\n  \"consigneeName\": \"XYZ Imports Ltd\",\n  \"consigneeAddress\": \"456 Trade Ave, Cebu\",\n  \"originCity\": \"Manila\",\n  \"originCountry\": \"PH\",\n  \"destinationCity\": \"Cebu\",\n  \"destinationCountry\": \"PH\",\n  \"mode\": \"sea\",\n  \"totalPieces\": 25,\n  \"totalWeight\": 1250.75,\n  \"commodityDescription\": \"Electronics & Components\",\n  \"assignedAgentId\": null,\n  \"estimatedArrival\": \"2024-03-15T10:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings"]
+            }
+          }
+        },
+        {
+          "name": "List Bookings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings?offset=0&limit=20&status=created&mode=sea",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings"],
+              "query": [
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "created"
+                },
+                {
+                  "key": "mode",
+                  "value": "sea"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Booking Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/{{shipmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings", "{{shipmentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scanning",
+      "item": [
+        {
+          "name": "Scan Package",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"BRK00123456\",\n  \"device_id\": \"device-12345\",\n  \"location\": \"Warehouse A - Dock 3\",\n  \"latitude\": 14.5994,\n  \"longitude\": 120.9842\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Batch Scan",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codes\": [\"BRK00123456\", \"BRK00123457\", \"BRK00123458\"],\n  \"device_id\": \"device-12345\",\n  \"location\": \"Warehouse A\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/scan/batch",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "scan", "batch"]
+            }
+          }
+        },
+        {
+          "name": "Get Package Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/scan/BRK00123456",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "scan", "BRK00123456"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "shipmentId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
