@@ -4,6 +4,7 @@ import { generateQRCode, generateBarcode } from '../utils/auth';
 import { createShipment, createPackage } from '../utils/shipmentService';
 import { logAudit } from '../utils/audit';
 import { ShipmentMode, ShipmentStatus, UserRole } from '../models/types';
+import { emitAdminActivityNotification, emitOperationsActivityNotification } from '../socket';
 import path from 'path';
 import fs from 'fs';
 
@@ -18,6 +19,24 @@ function getDatePart(date: Date): string {
   const day = String(date.getDate()).padStart(2, '0');
   const year = date.getFullYear();
   return `${month}/${day}/${year}`;
+}
+
+function extractCommodityValue(description: string | null | undefined, key: string): string | null {
+  if (!description) return null;
+
+  const parts = description.split(' | ');
+  for (const part of parts) {
+    const separatorIndex = part.indexOf(':');
+    if (separatorIndex < 0) continue;
+
+    const parsedKey = part.slice(0, separatorIndex).trim().toLowerCase();
+    const parsedValue = part.slice(separatorIndex + 1).trim();
+    if (parsedKey === key.toLowerCase() && parsedValue) {
+      return parsedValue;
+    }
+  }
+
+  return null;
 }
 
 async function generateModeBookingRef(mode: ShipmentMode): Promise<string> {
@@ -135,6 +154,13 @@ export async function createBooking(req: Request, res: Response): Promise<void> 
     res.status(201).json({
       message: 'Booking created successfully',
       data: shipment,
+    });
+
+    emitAdminActivityNotification({
+      type: 'booking_created',
+      message: `Booking created: ${shipment.booking_ref}`,
+      createdAt: new Date().toISOString(),
+      shipmentId: shipment.id,
     });
   } catch (error) {
     console.error('Error creating booking:', error);
@@ -443,7 +469,7 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
     }
 
     const { id } = req.params;
-    const { eventType, location, notes } = req.body;
+    const { eventType, location, notes, actualArrival } = req.body;
     const requestWithFile = req as Request & { file?: Express.Multer.File };
 
     if (!eventType) {
@@ -454,6 +480,21 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
     if (!Object.values(ShipmentStatus).includes(eventType as ShipmentStatus)) {
       res.status(400).json({ error: 'Invalid event type' });
       return;
+    }
+
+    let parsedActualArrival: Date | null = null;
+    if (eventType === ShipmentStatus.COMPLETED) {
+      if (!actualArrival) {
+        res.status(400).json({ error: 'Actual arrival is required when status is completed' });
+        return;
+      }
+
+      const converted = new Date(actualArrival);
+      if (Number.isNaN(converted.getTime())) {
+        res.status(400).json({ error: 'Invalid actual arrival date' });
+        return;
+      }
+      parsedActualArrival = converted;
     }
 
     const attachment = requestWithFile.file;
@@ -518,10 +559,15 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
 
     const { rows: updatedShipmentRows } = await pool.query(
       `UPDATE shipments
-       SET current_status = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
+       SET current_status = $1::shipment_status,
+           actual_arrival = CASE
+             WHEN $1::shipment_status = 'completed'::shipment_status THEN $2::timestamp
+             ELSE actual_arrival
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3
        RETURNING *`,
-      [eventType, id]
+      [eventType, parsedActualArrival ? parsedActualArrival.toISOString() : null, id]
     );
 
     await logAudit(
@@ -529,7 +575,7 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
       'ADD_SHIPMENT_EVENT',
       'shipment_event',
       eventRows[0].id,
-      { shipmentId: id, eventType, location: location || null },
+      { shipmentId: id, eventType, location: location || null, actualArrival: parsedActualArrival },
       req.ip
     );
 
@@ -539,8 +585,37 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
       shipment: updatedShipmentRows[0],
       attachmentUrl,
     });
+
+    const clientName =
+      extractCommodityValue(shipment.commodity_description as string | null | undefined, 'Customer') ||
+      shipment.shipper_name ||
+      'Unknown Client';
+
+    const waybill = shipment.waybill_number || 'N/A';
+
+    emitOperationsActivityNotification({
+      type: 'transit_event_updated',
+      message: `Transit event updated (${eventType}) for WAYBILL ${waybill} - Client ${clientName}`,
+      createdAt: new Date().toISOString(),
+      shipmentId: id,
+    });
+
+    emitAdminActivityNotification({
+      type: 'transit_event_updated',
+      message: `Transit event updated (${eventType}) for WAYBILL ${waybill} - Client ${clientName}`,
+      createdAt: new Date().toISOString(),
+      shipmentId: id,
+    });
   } catch (error) {
     console.error('Error adding booking event:', error);
+    const dbError = error as { code?: string; message?: string };
+    if (dbError.code === '22P02' || dbError.code === '42804') {
+      res.status(400).json({
+        error:
+          'Invalid completed event data. Ensure Actual Arrival is provided and shipment status supports completed.',
+      });
+      return;
+    }
     res.status(500).json({ error: 'Failed to add transit event' });
   }
 }

@@ -1,7 +1,8 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import apiService from '../services/api';
-import { Shipment, ShipmentMode } from '../types';
+import { Shipment, ShipmentMode, UserRole } from '../types';
+import { useAuthStore } from '../utils/authStore';
 
 interface ClientInformation {
   id: string;
@@ -21,7 +22,7 @@ interface BookingFormState {
   declaredValue: string;
   totalPieces: number;
   boxesCasesText: string;
-  weight: number;
+  weight: string;
   weightUnit: WeightUnit;
   cbm: string;
   dimension: string;
@@ -111,7 +112,7 @@ const initialState: BookingFormState = {
   declaredValue: '',
   totalPieces: 1,
   boxesCasesText: '',
-  weight: 1,
+  weight: '1',
   weightUnit: 'kg',
   cbm: '',
   dimension: '',
@@ -131,6 +132,10 @@ const initialState: BookingFormState = {
 };
 
 const CreateBookingPage: React.FC = () => {
+  const hasRole = useAuthStore((state) => state.hasRole);
+  const canManageBookings = hasRole(UserRole.ADMIN) || hasRole(UserRole.OPERATOR);
+  const canDeleteBookings = hasRole(UserRole.ADMIN);
+
   const clients = useMemo(() => {
     const listRaw = localStorage.getItem('clientInformationList');
     if (!listRaw) return [] as ClientInformation[];
@@ -266,7 +271,7 @@ const CreateBookingPage: React.FC = () => {
       declaredValue: parsed['Declared Value'] || '',
       totalPieces: shipment.total_pieces,
       boxesCasesText: parsed['Items/Boxes/Cases'] || '',
-      weight: displayWeight,
+      weight: String(displayWeight),
       weightUnit: parsedWeightUnit,
       cbm: parsed.CBM || '',
       dimension: parsed.Dimension || '',
@@ -287,6 +292,11 @@ const CreateBookingPage: React.FC = () => {
   };
 
   const handleEditBooking = (shipment: Shipment): void => {
+    if (!canManageBookings) {
+      setError('Guest users can only view bookings.');
+      return;
+    }
+
     setForm(mapShipmentToForm(shipment));
     setEditingBookingId(shipment.id);
     setFieldErrors({});
@@ -296,6 +306,11 @@ const CreateBookingPage: React.FC = () => {
   };
 
   const handleDeleteBookingRequest = (bookingId: string): void => {
+    if (!canDeleteBookings) {
+      setError('Only admin users can delete bookings.');
+      return;
+    }
+
     setPendingDeleteBookingId(bookingId);
     setError(null);
     setSuccess(null);
@@ -345,6 +360,11 @@ const CreateBookingPage: React.FC = () => {
     setCreatedShipment(null);
     setFieldErrors({});
 
+    if (!canManageBookings) {
+      setError('Guest users can only view bookings.');
+      return;
+    }
+
     const requiredFields: Array<{ key: BookingFieldErrorKey; label: string; isMissing: boolean }> = [
       { key: 'customerName', label: 'Customer Name', isMissing: !form.customerName.trim() },
       { key: 'waybillNumber', label: 'Waybill Number', isMissing: !form.waybillNumber.trim() },
@@ -372,7 +392,9 @@ const CreateBookingPage: React.FC = () => {
       nextFieldErrors.totalPieces = 'Must be at least 1.';
     }
 
-    if (form.weight <= 0) {
+    const parsedWeight = Number(form.weight);
+
+    if (!form.weight || Number.isNaN(parsedWeight) || parsedWeight <= 0) {
       nextFieldErrors.weight = 'Must be greater than 0.';
     }
 
@@ -400,7 +422,7 @@ const CreateBookingPage: React.FC = () => {
         destinationCountry: 'PH',
         mode: form.serviceMode,
         totalPieces: form.totalPieces,
-        totalWeight: toKilograms(form.weight, form.weightUnit),
+        totalWeight: toKilograms(parsedWeight, form.weightUnit),
         commodityDescription: buildCommodityDescription(),
         estimatedArrival: form.estimatedArrival,
       };
@@ -443,6 +465,12 @@ const CreateBookingPage: React.FC = () => {
         </div>
 
         <form ref={formRef} onSubmit={handleSubmit} className="bg-white rounded-xl shadow p-6 border border-brand-amber/20 space-y-5">
+          {!canManageBookings && (
+            <div className="p-3 bg-amber-100 border border-amber-300 text-amber-800 rounded-lg">
+              Guest users can only view bookings.
+            </div>
+          )}
+
           {editingBookingId && (
             <div className="p-3 bg-amber-100 border border-amber-300 text-amber-800 rounded-lg">
               You are editing an existing booking.
@@ -519,7 +547,7 @@ const CreateBookingPage: React.FC = () => {
             <div>
               <label className="block text-brand-charcoal font-semibold mb-2">Weight *</label>
               <div className="flex gap-2">
-                <input type="number" min={0.01} step={form.weightUnit === 'g' ? '1' : '0.01'} value={form.weight} onChange={(e) => updateField('weight', Number(e.currentTarget.value))} className={getFieldClass('weight')} required />
+                <input type="number" min={0.01} step={form.weightUnit === 'g' ? '1' : '0.01'} value={form.weight} onChange={(e) => updateField('weight', e.currentTarget.value)} className={getFieldClass('weight')} required />
                 <select
                   value={form.weightUnit}
                   onChange={(e) => updateField('weightUnit', e.currentTarget.value as WeightUnit)}
@@ -666,7 +694,7 @@ const CreateBookingPage: React.FC = () => {
             )}
             <button
               type="submit"
-              disabled={isSaving}
+              disabled={isSaving || !canManageBookings}
               className="bg-brand-red hover:bg-brand-redDark disabled:bg-brand-charcoal/40 text-white font-semibold px-6 py-2 rounded-lg"
             >
               {isSaving ? (editingBookingId ? 'Updating Booking...' : 'Creating Booking...') : editingBookingId ? 'Update Booking' : 'Create Booking'}
@@ -762,6 +790,7 @@ const CreateBookingPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleEditBooking(shipment)}
+                              disabled={!canManageBookings}
                               className="bg-brand-charcoal hover:bg-brand-ink text-white px-3 py-1 rounded"
                             >
                               Edit
@@ -769,6 +798,7 @@ const CreateBookingPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleDeleteBookingRequest(shipment.id)}
+                              disabled={!canDeleteBookings}
                               className="bg-brand-red hover:bg-brand-redDark text-white px-3 py-1 rounded"
                             >
                               Delete

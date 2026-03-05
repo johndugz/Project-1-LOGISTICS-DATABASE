@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import apiService from '../services/api';
 import { Shipment, UserRole } from '../types';
 import { useAuthStore } from '../utils/authStore';
@@ -37,8 +38,16 @@ interface EventDraft {
   eventType: string;
   location: string;
   notes: string;
+  actualArrival: string;
   attachedFileName: string;
   attachedFile: File | null;
+}
+
+interface ActivityNotification {
+  type: 'new_user' | 'booking_created' | 'transit_event_added' | 'transit_event_updated';
+  message: string;
+  createdAt: string;
+  shipmentId?: string;
 }
 
 const transitEventOptions = [
@@ -65,53 +74,6 @@ const getEventLabel = (eventType: string): string => {
 };
 
 const normalizeStatus = (status: string): string => status.toLowerCase();
-
-const extractAttachmentUrl = (notes?: string): string | null => {
-  if (!notes) return null;
-
-  const explicitMatch = notes.match(/Attachment URL:\s*([^|\s]+)/i);
-  if (explicitMatch?.[1]) {
-    return explicitMatch[1].trim();
-  }
-
-  const fallbackMatch = notes.match(/(https?:\/\/[^\s|]+\/uploads\/[^\s|]+|\/uploads\/[^\s|]+)/i);
-  return fallbackMatch?.[1] || null;
-};
-
-const extractAttachmentName = (notes?: string): string | null => {
-  if (!notes) return null;
-
-  const match = notes.match(/Attachment:\s*([^|]+)/i);
-  return match?.[1]?.trim() || null;
-};
-
-const cleanEventNotes = (notes?: string): string => {
-  if (!notes) {
-    return '-';
-  }
-
-  const sanitized = notes
-    .replace(/\s*\|\s*Attachment:\s*[^|]+/gi, '')
-    .replace(/\s*\|\s*Attachment URL:\s*[^|\s]+/gi, '')
-    .trim();
-
-  return sanitized || '-';
-};
-
-const resolveAttachmentUrl = (attachmentUrl: string): string => {
-  if (/^https?:\/\//i.test(attachmentUrl)) {
-    return attachmentUrl;
-  }
-
-  const apiBaseUrl = import.meta.env.VITE_API_URL || '/api';
-
-  if (apiBaseUrl.startsWith('http')) {
-    const backendOrigin = new URL(apiBaseUrl).origin;
-    return `${backendOrigin}${attachmentUrl.startsWith('/') ? attachmentUrl : `/${attachmentUrl}`}`;
-  }
-
-  return `${window.location.origin}${attachmentUrl.startsWith('/') ? attachmentUrl : `/${attachmentUrl}`}`;
-};
 
 const getStatusBadgeClass = (status: string): string => {
   const normalizedStatus = normalizeStatus(status);
@@ -162,11 +124,97 @@ const getShipmentStatusLabel = (status: string, mode: string): string => {
   }
 };
 
+const extractAttachmentUrl = (notes?: string): string | null => {
+  if (!notes) return null;
+
+  const explicitMatch = notes.match(/Attachment URL:\s*([^|\s]+)/i);
+  if (explicitMatch?.[1]) {
+    return explicitMatch[1].trim();
+  }
+
+  const fallbackMatch = notes.match(/(https?:\/\/[^\s|]+\/uploads\/[^\s|]+|\/uploads\/[^\s|]+)/i);
+  return fallbackMatch?.[1] || null;
+};
+
+const extractAttachmentName = (notes?: string): string | null => {
+  if (!notes) return null;
+
+  const match = notes.match(/Attachment:\s*([^|]+)/i);
+  return match?.[1]?.trim() || null;
+};
+
+const cleanEventNotes = (notes?: string): string => {
+  if (!notes) {
+    return '-';
+  }
+
+  const sanitized = notes
+    .replace(/\s*\|\s*Attachment:\s*[^|]+/gi, '')
+    .replace(/\s*\|\s*Attachment URL:\s*[^|\s]+/gi, '')
+    .trim();
+
+  return sanitized || '-';
+};
+
+const resolveAttachmentUrl = (attachmentUrl: string): string => {
+  if (/^https?:\/\//i.test(attachmentUrl)) {
+    return attachmentUrl;
+  }
+
+  const apiBaseUrl = import.meta.env.VITE_API_URL || '/api';
+
+  if (apiBaseUrl.startsWith('http')) {
+    const backendOrigin = new URL(apiBaseUrl).origin;
+    return `${backendOrigin}${attachmentUrl.startsWith('/') ? attachmentUrl : `/${attachmentUrl}`}`;
+  }
+
+  return `${window.location.origin}${attachmentUrl.startsWith('/') ? attachmentUrl : `/${attachmentUrl}`}`;
+};
+
+const formatRelativeTime = (isoDate: string): string => {
+  const target = new Date(isoDate).getTime();
+  const diffMs = Date.now() - target;
+
+  if (Number.isNaN(target) || diffMs < 0) return 'just now';
+
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days > 1 ? 's' : ''} ago`;
+};
+
+const parseCommodityMetadata = (description?: string): Record<string, string> => {
+  if (!description) return {};
+
+  return description
+    .split(' | ')
+    .reduce<Record<string, string>>((acc, item) => {
+      const separatorIndex = item.indexOf(':');
+      if (separatorIndex < 0) return acc;
+
+      const key = item.slice(0, separatorIndex).trim();
+      const value = item.slice(separatorIndex + 1).trim();
+
+      if (!key || !value) return acc;
+      acc[key] = value;
+      return acc;
+    }, {});
+};
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
+  const token = useAuthStore((state) => state.token);
   const hasRole = useAuthStore((state) => state.hasRole);
   const isAdmin = hasRole(UserRole.ADMIN);
+  const isOperator = hasRole(UserRole.OPERATOR);
+  const canManage = isAdmin || isOperator;
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [summaryShipments, setSummaryShipments] = useState<Shipment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -174,7 +222,7 @@ const Dashboard: React.FC = () => {
   const [filters, setFilters] = useState({
     status: '',
     mode: '',
-    completionView: 'active' as 'active' | 'completed' | 'all',
+    completionView: 'all' as 'active' | 'completed' | 'all',
   });
   const [expandedShipmentId, setExpandedShipmentId] = useState<string | null>(null);
   const [detailsByShipment, setDetailsByShipment] = useState<Record<string, ShipmentDetailsResponse>>({});
@@ -185,6 +233,12 @@ const Dashboard: React.FC = () => {
   const [eventDeletingId, setEventDeletingId] = useState<string | null>(null);
   const [expandedAttachmentByEvent, setExpandedAttachmentByEvent] = useState<Record<string, boolean>>({});
   const [enlargedAttachmentByEvent, setEnlargedAttachmentByEvent] = useState<Record<string, boolean>>({});
+  const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
+  const [activityNotifications, setActivityNotifications] = useState<ActivityNotification[]>([]);
+  const [lastNotificationAt, setLastNotificationAt] = useState<string | null>(null);
+  const [pendingOpenShipmentId, setPendingOpenShipmentId] = useState<string | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
 
   const shipmentSummary = useMemo(() => {
     const counts = {
@@ -197,6 +251,7 @@ const Dashboard: React.FC = () => {
       outForDeliverySea: 0,
       outForDeliveryAir: 0,
       delivered: 0,
+      completed: 0,
     };
 
     summaryShipments.forEach((shipment) => {
@@ -228,6 +283,9 @@ const Dashboard: React.FC = () => {
           break;
         case 'delivered':
           counts.delivered += 1;
+          break;
+        case 'completed':
+          counts.completed += 1;
           break;
         default:
           break;
@@ -289,6 +347,20 @@ const Dashboard: React.FC = () => {
     }
   }, []);
 
+  const loadPendingApprovals = useCallback(async (): Promise<void> => {
+    if (!isAdmin) {
+      setPendingApprovalCount(0);
+      return;
+    }
+
+    try {
+      const pendingUsers = await apiService.listPendingUsers();
+      setPendingApprovalCount(pendingUsers.length);
+    } catch {
+      setPendingApprovalCount(0);
+    }
+  }, [isAdmin]);
+
   useEffect(() => {
     loadShipments();
   }, [loadShipments]);
@@ -298,15 +370,88 @@ const Dashboard: React.FC = () => {
   }, [loadShipmentSummary]);
 
   useEffect(() => {
+    loadPendingApprovals();
+  }, [loadPendingApprovals]);
+
+  useEffect(() => {
     const intervalId = window.setInterval(() => {
       loadShipments(false);
       loadShipmentSummary();
+      loadPendingApprovals();
     }, 30000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadShipments, loadShipmentSummary]);
+  }, [loadShipments, loadShipmentSummary, loadPendingApprovals]);
+
+  useEffect(() => {
+    if (!canManage || !token) return;
+
+    const apiBaseUrl = import.meta.env.VITE_API_URL || '/api';
+    const backendOrigin = apiBaseUrl.startsWith('http')
+      ? new URL(apiBaseUrl).origin
+      : window.location.origin;
+
+    const socket = io(backendOrigin, {
+      auth: { token },
+      transports: ['websocket'],
+    });
+
+    if (isAdmin) {
+      socket.on('pending-approvals-updated', () => {
+        loadPendingApprovals();
+        setLastNotificationAt(new Date().toISOString());
+      });
+
+      socket.on('admin-activity-notification', (notification: ActivityNotification) => {
+        setActivityNotifications((prev) => [notification, ...prev].slice(0, 20));
+        setLastNotificationAt(notification.createdAt || new Date().toISOString());
+      });
+    }
+
+    socket.on('operations-activity-notification', (notification: ActivityNotification) => {
+      if (notification.type === 'new_user') {
+        return;
+      }
+      setActivityNotifications((prev) => [notification, ...prev].slice(0, 20));
+      setLastNotificationAt(notification.createdAt || new Date().toISOString());
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [isAdmin, canManage, token, loadPendingApprovals]);
+
+  useEffect(() => {
+    if (!pendingOpenShipmentId) return;
+
+    const existsInList = shipments.some((shipment) => shipment.id === pendingOpenShipmentId);
+    if (!existsInList) return;
+
+    handleToggleDetails(pendingOpenShipmentId);
+    setPendingOpenShipmentId(null);
+
+    window.setTimeout(() => {
+      const card = document.getElementById(`shipment-card-${pendingOpenShipmentId}`);
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 250);
+  }, [pendingOpenShipmentId, shipments]);
+
+  useEffect(() => {
+    if (!isSettingsMenuOpen && !isNotificationMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent): void => {
+      const target = event.target as Node;
+      if (!settingsMenuRef.current?.contains(target)) {
+        setIsSettingsMenuOpen(false);
+        setIsNotificationMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, [isSettingsMenuOpen, isNotificationMenuOpen]);
 
   const handleLogout = (): void => {
     logout();
@@ -332,6 +477,7 @@ const Dashboard: React.FC = () => {
           eventType: 'booked',
           location: '',
           notes: '',
+          actualArrival: '',
           attachedFileName: '',
           attachedFile: null,
         },
@@ -364,6 +510,7 @@ const Dashboard: React.FC = () => {
         eventType: prev[shipmentId]?.eventType || 'booked',
         location: prev[shipmentId]?.location || '',
         notes: prev[shipmentId]?.notes || '',
+        actualArrival: prev[shipmentId]?.actualArrival || '',
         attachedFileName: prev[shipmentId]?.attachedFileName || '',
         attachedFile: prev[shipmentId]?.attachedFile || null,
         [field]: value,
@@ -378,6 +525,7 @@ const Dashboard: React.FC = () => {
         eventType: prev[shipmentId]?.eventType || 'booked',
         location: prev[shipmentId]?.location || '',
         notes: prev[shipmentId]?.notes || '',
+        actualArrival: prev[shipmentId]?.actualArrival || '',
         attachedFileName: file?.name || '',
         attachedFile: file,
       },
@@ -385,12 +533,36 @@ const Dashboard: React.FC = () => {
   };
 
   const handleAddTransitEvent = async (shipmentId: string): Promise<void> => {
+    if (!canManage) {
+      setDetailsErrorByShipment((prev) => ({
+        ...prev,
+        [shipmentId]: 'Guest users can only view shipment details.',
+      }));
+      return;
+    }
+
     const draft = eventDraftByShipment[shipmentId];
     if (!draft?.eventType) {
       setDetailsErrorByShipment((prev) => ({
         ...prev,
         [shipmentId]: 'Please select an event type.',
       }));
+      return;
+    }
+
+    const mappedStatus = getMappedStatus(draft.eventType);
+    if (mappedStatus === 'completed' && !draft.actualArrival) {
+      setExpandedShipmentId(shipmentId);
+      setDetailsErrorByShipment((prev) => ({
+        ...prev,
+        [shipmentId]: 'Actual arrival is required when status is Completed.',
+      }));
+
+      window.setTimeout(() => {
+        const field = document.getElementById(`actual-arrival-${shipmentId}`) as HTMLInputElement | null;
+        field?.focus();
+        field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
       return;
     }
 
@@ -405,14 +577,31 @@ const Dashboard: React.FC = () => {
       }
 
       const formData = new FormData();
-      formData.append('eventType', getMappedStatus(draft.eventType));
+      formData.append('eventType', mappedStatus);
       formData.append('location', draft.location);
       formData.append('notes', noteParts.join(' - '));
+      if (draft.actualArrival) {
+        formData.append('actualArrival', new Date(draft.actualArrival).toISOString());
+      }
       if (draft.attachedFile) {
         formData.append('attachment', draft.attachedFile);
       }
 
       await apiService.addBookingEvent(shipmentId, formData);
+
+      const shipmentInList = shipments.find((row) => row.id === shipmentId);
+      const shipmentMetadata = parseCommodityMetadata(shipmentInList?.commodity_description);
+      const clientName =
+        shipmentMetadata.Client || shipmentMetadata.Customer || shipmentInList?.shipper_name || 'Unknown Client';
+      const waybill = shipmentInList?.waybill_number || 'N/A';
+      const localNotification: ActivityNotification = {
+        type: 'transit_event_updated',
+        message: `Transit event updated (${getMappedStatus(draft.eventType)}) for WAYBILL ${waybill} - Client ${clientName}`,
+        createdAt: new Date().toISOString(),
+        shipmentId,
+      };
+      setActivityNotifications((prev) => [localNotification, ...prev].slice(0, 20));
+      setLastNotificationAt(localNotification.createdAt);
 
       const refreshed = (await apiService.getShipment(shipmentId)) as unknown as ShipmentDetailsResponse;
       setDetailsByShipment((prev) => ({ ...prev, [shipmentId]: refreshed }));
@@ -424,6 +613,7 @@ const Dashboard: React.FC = () => {
           eventType: draft.eventType,
           location: '',
           notes: '',
+          actualArrival: '',
           attachedFileName: '',
           attachedFile: null,
         },
@@ -440,6 +630,14 @@ const Dashboard: React.FC = () => {
   };
 
   const handleDeleteTransitEvent = async (shipmentId: string, eventId: string): Promise<void> => {
+    if (!isAdmin) {
+      setDetailsErrorByShipment((prev) => ({
+        ...prev,
+        [shipmentId]: 'Only admin users can delete event logs.',
+      }));
+      return;
+    }
+
     const shouldDelete = window.confirm('Delete this event log? This cannot be undone.');
     if (!shouldDelete) {
       return;
@@ -477,6 +675,24 @@ const Dashboard: React.FC = () => {
     });
   };
 
+  const handleNotificationViewDetails = (shipmentId: string): void => {
+    setFilters({ status: '', mode: '', completionView: 'all' });
+    if (expandedShipmentId !== shipmentId) {
+      setExpandedShipmentId(null);
+    }
+    setIsNotificationMenuOpen(false);
+    setPendingOpenShipmentId(shipmentId);
+    void loadShipments(false);
+  };
+
+  const handleClearActivityNotification = (indexToRemove: number): void => {
+    setActivityNotifications((prev) => prev.filter((_, index) => index !== indexToRemove));
+  };
+
+  const handleClearAllActivityNotifications = (): void => {
+    setActivityNotifications([]);
+  };
+
   return (
     <div className="min-h-screen bg-brand-sand py-8 px-4">
       <div className="max-w-6xl mx-auto">
@@ -493,7 +709,7 @@ const Dashboard: React.FC = () => {
             <h1 className="text-4xl text-brand-ink">
               Dashboard
             </h1>
-            {isAdmin && (
+            {canManage && (
               <Link
                 to="/create-booking"
                 className="inline-block mt-4 bg-brand-red hover:bg-brand-redDark text-white font-semibold px-4 py-2 rounded-lg"
@@ -502,8 +718,8 @@ const Dashboard: React.FC = () => {
               </Link>
             )}
           </div>
-          <div className="flex gap-2 mt-2">
-            {isAdmin && (
+          <div className="flex gap-2 mt-2" ref={settingsMenuRef}>
+            {canManage && (
               <Link
                 to="/client-information"
                 className="bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-4 py-2 rounded-lg"
@@ -511,24 +727,145 @@ const Dashboard: React.FC = () => {
                 Client Information
               </Link>
             )}
-            <Link
-              to="/account"
-              className="bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-4 py-2 rounded-lg"
-            >
-              Account
-            </Link>
-            <Link
-              to="/settings"
-              className="bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-4 py-2 rounded-lg"
-            >
-              Settings
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="bg-brand-red hover:bg-brand-redDark text-white font-semibold px-4 py-2 rounded-lg"
-            >
-              Logout
-            </button>
+
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNotificationMenuOpen((prev) => !prev);
+                  setIsSettingsMenuOpen(false);
+                }}
+                className="relative bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-3 py-2 rounded-lg"
+                title="Notifications"
+              >
+                🌐
+                {activityNotifications.length > 0 && (
+                  <span className="absolute -top-2 -right-2 bg-brand-red text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                    {activityNotifications.length > 99 ? '99+' : activityNotifications.length}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {canManage && isNotificationMenuOpen && (
+              <div className="absolute right-56 mt-12 w-72 bg-white border border-brand-amber/30 rounded-lg shadow-lg z-20 p-3">
+                {isAdmin && (
+                  <>
+                    <p className="text-sm text-brand-charcoal font-semibold mb-1">Notification</p>
+                    {lastNotificationAt && (
+                      <p className="text-xs text-brand-charcoal/70 mb-2">
+                        Updated {formatRelativeTime(lastNotificationAt)}
+                      </p>
+                    )}
+                    {pendingApprovalCount > 0 ? (
+                      <>
+                        <p className="text-sm text-brand-charcoal/90 mb-2">
+                          {pendingApprovalCount === 1
+                            ? 'New user has created an account.'
+                            : `${pendingApprovalCount} new users have created accounts.`}
+                        </p>
+                        <Link
+                          to="/settings#pending-user-approvals"
+                          onClick={() => setIsNotificationMenuOpen(false)}
+                          className="inline-block text-sm bg-brand-red hover:bg-brand-redDark text-white font-semibold px-3 py-2 rounded"
+                        >
+                          Go to User Approval
+                        </Link>
+                      </>
+                    ) : (
+                      <p className="text-sm text-brand-charcoal/80 mb-2">No new user notifications.</p>
+                    )}
+                  </>
+                )}
+
+                <div className={isAdmin ? 'mt-3 pt-2 border-t border-brand-amber/20' : ''}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-sm text-brand-charcoal font-semibold">Activity ({activityNotifications.length})</p>
+                    <button
+                      type="button"
+                      onClick={handleClearAllActivityNotifications}
+                      className="text-xs bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-2 py-1 rounded"
+                      disabled={activityNotifications.length === 0}
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  {activityNotifications.length === 0 ? (
+                    <p className="text-sm text-brand-charcoal/80">No booking or transit notifications yet.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                      {activityNotifications.map((item, index) => (
+                        <div key={`${item.createdAt}-${index}`} className="rounded border border-brand-amber/20 p-2 bg-brand-sand/40">
+                          <p className="text-sm text-brand-charcoal">{item.message}</p>
+                          <p className="text-xs text-brand-charcoal/70 mt-1">{formatRelativeTime(item.createdAt)}</p>
+                          <div className="mt-2 flex items-center gap-2">
+                            {item.shipmentId && (
+                              <button
+                                type="button"
+                                onClick={() => handleNotificationViewDetails(item.shipmentId as string)}
+                                className="text-xs bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-2 py-1 rounded"
+                              >
+                                View Details
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleClearActivityNotification(index)}
+                              className="text-xs bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-2 py-1 rounded"
+                              title="Clear notification"
+                            >
+                              ✅
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSettingsMenuOpen((prev) => !prev);
+                  setIsNotificationMenuOpen(false);
+                }}
+                className="bg-brand-charcoal hover:bg-brand-ink text-white font-semibold px-4 py-2 rounded-lg"
+              >
+                Settings ▾
+              </button>
+
+              {isSettingsMenuOpen && (
+                <div className="absolute right-0 mt-2 w-52 bg-white border border-brand-amber/30 rounded-lg shadow-lg z-20 py-1">
+                  <Link
+                    to="/settings"
+                    onClick={() => setIsSettingsMenuOpen(false)}
+                    className="block px-4 py-2 text-brand-charcoal hover:bg-brand-sand"
+                  >
+                    Change Password
+                  </Link>
+                  {isAdmin && (
+                    <Link
+                      to="/settings#pending-user-approvals"
+                      onClick={() => setIsSettingsMenuOpen(false)}
+                      className="block px-4 py-2 text-brand-charcoal hover:bg-brand-sand"
+                    >
+                      User Approval
+                    </Link>
+                  )}
+                  <div className="my-1 border-t border-brand-amber/30" />
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="w-full text-left px-4 py-2 text-brand-red hover:bg-red-50"
+                  >
+                    Log out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -641,7 +978,7 @@ const Dashboard: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
               <button
                 type="button"
                 onClick={() => handleFlowCardClick('out_for_delivery', 'land')}
@@ -677,6 +1014,15 @@ const Dashboard: React.FC = () => {
                 <p className="text-sm font-semibold text-brand-ink">✅ Delivered</p>
                 <p className="text-base font-semibold text-brand-charcoal leading-tight">{shipmentSummary.delivered}</p>
               </button>
+
+              <button
+                type="button"
+                onClick={() => handleFlowCardClick('completed', '', 'all')}
+                className="text-left rounded-lg border border-brand-amber/20 border-l-4 border-l-brand-ink bg-brand-sand/60 px-3 py-2 hover:bg-brand-sand min-w-0"
+              >
+                <p className="text-sm font-semibold text-brand-ink">🏁 Completed</p>
+                <p className="text-base font-semibold text-brand-charcoal leading-tight">{shipmentSummary.completed}</p>
+              </button>
             </div>
           </div>
         </div>
@@ -694,18 +1040,33 @@ const Dashboard: React.FC = () => {
           </div>
         ) : (
           <div className="grid gap-4">
-            {shipments.map((shipment: Shipment) => (
-              <div
-                key={shipment.id}
-                className="bg-white rounded-xl shadow p-6 hover:shadow-lg transition border border-brand-amber/20"
-              >
+            {shipments.map((shipment: Shipment) => {
+              const commodityMetadata = parseCommodityMetadata(shipment.commodity_description);
+              const clientBusinessName = commodityMetadata.Customer || '-';
+              const shipperContactNumber = commodityMetadata['Shipper Phone'] || '-';
+              const consigneeContactNumber = commodityMetadata['Consignee Phone'] || '-';
+              const commodity = commodityMetadata.Commodity || shipment.commodity_description || '-';
+              const boxes = commodityMetadata['Items/Boxes/Cases'] || String(shipment.total_pieces || '-');
+
+              return (
+                <div
+                  key={shipment.id}
+                  id={`shipment-card-${shipment.id}`}
+                  className="bg-white rounded-xl shadow p-6 hover:shadow-lg transition border border-brand-amber/20"
+                >
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-xl text-brand-ink">
-                      {shipment.booking_ref}
-                    </h3>
-                    <p className="text-sm text-brand-charcoal/80">
-                      Waybill: {shipment.waybill_number}
+                    <p className="text-lg font-bold text-brand-ink">
+                      Client: {clientBusinessName}
+                    </p>
+                    <p className="text-sm text-brand-charcoal/90">
+                      Waybill: <span className="font-semibold text-brand-ink">{shipment.waybill_number || '-'}</span>
+                    </p>
+                    <p className="text-sm text-brand-charcoal/90">
+                      Commodity: <span className="font-semibold text-brand-ink">{commodity}</span>
+                    </p>
+                    <p className="text-sm text-brand-charcoal/90">
+                      No. Boxes: <span className="font-semibold text-brand-ink">{boxes}</span>
                     </p>
                   </div>
                   <span
@@ -715,33 +1076,6 @@ const Dashboard: React.FC = () => {
                   >
                     {getShipmentStatusLabel(shipment.current_status, shipment.mode)}
                   </span>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <span className="text-brand-charcoal/75">From:</span>
-                    <p className="font-semibold text-brand-ink">
-                      {shipment.origin_city}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-brand-charcoal/75">To:</span>
-                    <p className="font-semibold text-brand-ink">
-                      {shipment.destination_city}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-brand-charcoal/75">Pieces:</span>
-                    <p className="font-semibold text-brand-ink">
-                      {shipment.total_pieces}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-brand-charcoal/75">Mode:</span>
-                    <p className="font-semibold uppercase text-brand-ink">
-                      {shipment.mode}
-                    </p>
-                  </div>
                 </div>
 
                 <div className="mt-4 flex gap-2">
@@ -764,10 +1098,16 @@ const Dashboard: React.FC = () => {
                     ) : detailsByShipment[shipment.id] ? (
                       <>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                          <p><span className="font-semibold">Booking Reference:</span> {detailsByShipment[shipment.id].shipment.booking_ref}</p>
+                          <p><span className="font-semibold">Client (from Name of Business):</span> {commodityMetadata.Customer || '-'}</p>
+                          <p><span className="font-semibold">Waybill:</span> {detailsByShipment[shipment.id].shipment.waybill_number || '-'}</p>
                           <p><span className="font-semibold">Shipper:</span> {detailsByShipment[shipment.id].shipment.shipper_name}</p>
                           <p><span className="font-semibold">Consignee:</span> {detailsByShipment[shipment.id].shipment.consignee_name}</p>
                           <p><span className="font-semibold">Shipper Address:</span> {detailsByShipment[shipment.id].shipment.shipper_address}</p>
                           <p><span className="font-semibold">Consignee Address:</span> {detailsByShipment[shipment.id].shipment.consignee_address}</p>
+                          <p><span className="font-semibold">Shipper Contact Number:</span> {shipperContactNumber}</p>
+                          <p><span className="font-semibold">Consignee Contact Number:</span> {consigneeContactNumber}</p>
+                          <p><span className="font-semibold">No. of Boxes:</span> {boxes}</p>
                           <p><span className="font-semibold">Weight:</span> {detailsByShipment[shipment.id].shipment.total_weight}</p>
                           <p><span className="font-semibold">Commodity:</span> {detailsByShipment[shipment.id].shipment.commodity_description || '-'}</p>
                           <p><span className="font-semibold">Estimated Arrival:</span> {detailsByShipment[shipment.id].shipment.estimated_arrival ? new Date(detailsByShipment[shipment.id].shipment.estimated_arrival).toLocaleString() : '-'}</p>
@@ -776,6 +1116,8 @@ const Dashboard: React.FC = () => {
 
                         <div className="mt-4">
                           <p className="font-semibold text-brand-ink mb-2">Add Transit Event</p>
+                          {canManage ? (
+                          <>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <select
                               value={eventDraftByShipment[shipment.id]?.eventType || 'booked'}
@@ -808,6 +1150,40 @@ const Dashboard: React.FC = () => {
                               }
                               className="px-3 py-2 border border-brand-amber/40 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-red/40"
                             />
+                            {getMappedStatus(eventDraftByShipment[shipment.id]?.eventType || 'booked') === 'completed' && (
+                              <div>
+                                {(() => {
+                                  const actualArrivalError = detailsErrorByShipment[shipment.id] || '';
+                                  const hasActualArrivalError = /actual arrival/i.test(actualArrivalError);
+
+                                  return (
+                                    <>
+                                      <input
+                                        id={`actual-arrival-${shipment.id}`}
+                                        type="datetime-local"
+                                        value={eventDraftByShipment[shipment.id]?.actualArrival || ''}
+                                        onChange={(e) => {
+                                          handleEventDraftChange(shipment.id, 'actualArrival', e.currentTarget.value);
+                                          if (hasActualArrivalError) {
+                                            setDetailsErrorByShipment((prev) => ({ ...prev, [shipment.id]: '' }));
+                                          }
+                                        }}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-red/40 ${
+                                          hasActualArrivalError ? 'border-red-400' : 'border-brand-amber/40'
+                                        }`}
+                                        required
+                                        title="Actual arrival is required for Completed status"
+                                      />
+                                      {hasActualArrivalError ? (
+                                        <p className="text-xs text-red-600 mt-1">{actualArrivalError}</p>
+                                      ) : (
+                                        <p className="text-xs text-brand-charcoal/70 mt-1">Required when status is Completed.</p>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            )}
                             <input
                               type="file"
                               accept="image/*"
@@ -831,6 +1207,10 @@ const Dashboard: React.FC = () => {
                           >
                             {eventSavingId === shipment.id ? 'Saving Event...' : 'Add Transit Event'}
                           </button>
+                          </>
+                          ) : (
+                            <p className="text-sm text-brand-charcoal/80">Guest users can only view shipment events.</p>
+                          )}
                         </div>
 
                         <div className="mt-4">
@@ -854,16 +1234,18 @@ const Dashboard: React.FC = () => {
                                   <div key={event.id} className="bg-white border border-brand-amber/20 rounded p-2 text-sm">
                                     <div className="flex items-start justify-between gap-2">
                                       <p><span className="font-semibold">Type:</span> {event.event_type}</p>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteTransitEvent(shipment.id, event.id)}
-                                        disabled={eventDeletingId === event.id}
-                                        className="h-6 min-w-6 px-2 rounded bg-brand-red hover:bg-brand-redDark disabled:bg-brand-charcoal/40 text-white font-bold leading-none"
-                                        aria-label="Delete event log"
-                                        title="Delete event log"
-                                      >
-                                        {eventDeletingId === event.id ? '...' : 'X'}
-                                      </button>
+                                      {isAdmin && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteTransitEvent(shipment.id, event.id)}
+                                          disabled={eventDeletingId === event.id}
+                                          className="h-6 min-w-6 px-2 rounded bg-brand-red hover:bg-brand-redDark disabled:bg-brand-charcoal/40 text-white font-bold leading-none"
+                                          aria-label="Delete event log"
+                                          title="Delete event log"
+                                        >
+                                          {eventDeletingId === event.id ? '...' : 'X'}
+                                        </button>
+                                      )}
                                     </div>
                                     <p><span className="font-semibold">Location:</span> {event.location || '-'}</p>
                                     <p><span className="font-semibold">Notes:</span> {cleanEventNotes(event.notes)}</p>
@@ -922,7 +1304,8 @@ const Dashboard: React.FC = () => {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

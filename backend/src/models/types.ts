@@ -36,6 +36,12 @@ export interface User {
   region?: string;
   phone?: string;
   is_active: boolean;
+  email_verified: boolean;
+  email_verification_code_hash?: string;
+  email_verification_expires_at?: Date;
+  admin_approved: boolean;
+  approved_at?: Date;
+  approved_by?: string;
   created_at: Date;
   updated_at: Date;
 }

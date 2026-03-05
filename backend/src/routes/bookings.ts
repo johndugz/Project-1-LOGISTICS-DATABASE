@@ -26,8 +26,8 @@ router.get('/:id', getBooking);
 // Update booking (operator, admin)
 router.put('/:id', roleMiddleware(UserRole.OPERATOR, UserRole.ADMIN), updateBooking);
 
-// Delete booking (operator, admin)
-router.delete('/:id', roleMiddleware(UserRole.OPERATOR, UserRole.ADMIN), deleteBooking);
+// Delete booking (admin only)
+router.delete('/:id', roleMiddleware(UserRole.ADMIN), deleteBooking);
 
 // Add booking transit event (operator, admin)
 router.post(
@@ -39,7 +39,7 @@ router.post(
 
 router.delete(
   '/:id/events/:eventId',
-  roleMiddleware(UserRole.OPERATOR, UserRole.ADMIN),
+  roleMiddleware(UserRole.ADMIN),
   deleteBookingEvent
 );
 

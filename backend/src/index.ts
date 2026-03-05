@@ -2,6 +2,7 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import 'dotenv/config';
 import path from 'path';
+import http from 'http';
 
 import { runMigrations } from './config/database';
 import { auditMiddleware } from './middleware/auth';
@@ -9,8 +10,10 @@ import { auditMiddleware } from './middleware/auth';
 import authRoutes from './routes/auth';
 import bookingRoutes from './routes/bookings';
 import scanRoutes from './routes/scan';
+import { initializeSocket } from './socket';
 
 const app: Express = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 const corsOrigin = process.env.CORS_ORIGIN;
 
@@ -53,7 +56,9 @@ async function start(): Promise<void> {
     // Run migrations
     await runMigrations();
 
-    app.listen(PORT, () => {
+    initializeSocket(server);
+
+    server.listen(PORT, () => {
       console.log(`✓ Server running on http://localhost:${PORT}`);
     });
   } catch (error) {

@@ -18,7 +18,8 @@ interface ClientInformation {
 
 const ClientInformationPage: React.FC = () => {
   const hasRole = useAuthStore((state) => state.hasRole);
-  const canEdit = hasRole(UserRole.ADMIN);
+  const canEdit = hasRole(UserRole.ADMIN) || hasRole(UserRole.OPERATOR);
+  const canDelete = hasRole(UserRole.ADMIN);
 
   const initialClients = useMemo(() => {
     const listRaw = localStorage.getItem('clientInformationList');
@@ -88,7 +89,7 @@ const ClientInformationPage: React.FC = () => {
     setError(null);
 
     if (!canEdit) {
-      setError('Only admin users can input client information.');
+      setError('Only admin and operator users can input client information.');
       return;
     }
 
@@ -187,7 +188,10 @@ const ClientInformationPage: React.FC = () => {
   };
 
   const handleDelete = (id: string): void => {
-    if (!canEdit) return;
+    if (!canDelete) {
+      setError('Only admin users can delete client information.');
+      return;
+    }
 
     setPendingDeleteClientId(id);
     setSuccess(null);
@@ -273,7 +277,7 @@ const ClientInformationPage: React.FC = () => {
 
         {!canEdit && (
           <div className="mb-4 p-3 bg-amber-100 border border-amber-300 text-amber-800 rounded-lg">
-            Only admin users can input client information.
+            Guest users can only view client information.
           </div>
         )}
 
@@ -498,7 +502,7 @@ const ClientInformationPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleDelete(client.id)}
-                              disabled={!canEdit}
+                              disabled={!canDelete}
                               className="bg-brand-red hover:bg-brand-redDark text-white px-3 py-1 rounded disabled:bg-gray-400"
                             >
                               Delete

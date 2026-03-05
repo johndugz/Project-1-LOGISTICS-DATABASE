@@ -1,6 +1,41 @@
 import axios, { AxiosInstance } from 'axios';
 import { User, LoginResponse, Shipment } from '../types';
 
+interface SignupResponse {
+  message: string;
+  requiresVerification: boolean;
+  requiresAdminApproval: boolean;
+  emailSent: boolean;
+  devVerificationCode?: string;
+}
+
+interface PendingUser {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  email_verified: boolean;
+  admin_approved: boolean;
+  created_at: string;
+}
+
+interface CurrentUser {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  region?: string | null;
+  phone?: string | null;
+  is_active: boolean;
+  email_verified: boolean;
+  admin_approved: boolean;
+  created_at: string;
+  approved_at?: string | null;
+  updated_at: string;
+}
+
 // Vite exposes environment variables prefixed with VITE_
 // you can define VITE_API_URL in a .env file or rely on the fallback below
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -39,6 +74,58 @@ class ApiService {
     this.setAuthHeader(this.token);
 
     return response.data;
+  }
+
+  async signup(email: string, password: string, firstName: string, lastName: string): Promise<SignupResponse> {
+    const response = await this.client.post<SignupResponse>('/auth/signup', {
+      email,
+      password,
+      firstName,
+      lastName,
+    });
+
+    return response.data;
+  }
+
+  async verifyEmail(email: string, code: string): Promise<void> {
+    await this.client.post('/auth/verify-email', { email, code });
+  }
+
+  async listPendingUsers(): Promise<PendingUser[]> {
+    const response = await this.client.get<{ data: PendingUser[] }>('/auth/pending-users');
+    return response.data.data || [];
+  }
+
+  async listCurrentUsers(): Promise<CurrentUser[]> {
+    const response = await this.client.get<{ data: CurrentUser[] }>('/auth/users');
+    return response.data.data || [];
+  }
+
+  async approveUser(userId: string, role: 'admin' | 'operator' | 'auditor'): Promise<void> {
+    await this.client.post(`/auth/users/${userId}/approve`, { role });
+  }
+
+  async updateUserRole(
+    userId: string,
+    role: 'admin' | 'operator' | 'auditor' | 'agent' | 'customer'
+  ): Promise<void> {
+    await this.client.put(`/auth/users/${userId}/role`, { role });
+  }
+
+  async updateUser(
+    userId: string,
+    payload: {
+      firstName?: string;
+      lastName?: string;
+      role?: 'admin' | 'operator' | 'auditor' | 'agent' | 'customer';
+      password?: string;
+    }
+  ): Promise<void> {
+    await this.client.put(`/auth/users/${userId}`, payload);
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    await this.client.delete(`/auth/users/${userId}`);
   }
 
   async logout(): Promise<void> {
