@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: toplis-backend
+    name: toplis-backend-api
     env: node
     rootDir: backend
     plan: free
