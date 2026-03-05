@@ -599,13 +599,6 @@ export async function addBookingEvent(req: Request, res: Response): Promise<void
       createdAt: new Date().toISOString(),
       shipmentId: id,
     });
-
-    emitAdminActivityNotification({
-      type: 'transit_event_updated',
-      message: `Transit event updated (${eventType}) for WAYBILL ${waybill} - Client ${clientName}`,
-      createdAt: new Date().toISOString(),
-      shipmentId: id,
-    });
   } catch (error) {
     console.error('Error adding booking event:', error);
     const dbError = error as { code?: string; message?: string };

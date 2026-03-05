@@ -613,7 +613,7 @@ const Dashboard: React.FC = () => {
         createdAt: new Date().toISOString(),
         shipmentId,
       };
-      addActivityNotification(localNotification);
+      setLastNotificationAt(localNotification.createdAt);
 
       const refreshed = (await apiService.getShipment(shipmentId)) as unknown as ShipmentDetailsResponse;
       setDetailsByShipment((prev) => ({ ...prev, [shipmentId]: refreshed }));
