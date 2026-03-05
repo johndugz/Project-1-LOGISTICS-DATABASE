@@ -1,19 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import App from './App';
 
 // Ensure React Refresh globals exist before loading modules that expect them
 (window as any).$RefreshReg$ = (window as any).$RefreshReg$ || (() => {});
 (window as any).$RefreshSig$ = (window as any).$RefreshSig$ || (() => (type: any) => type);
-
-window.addEventListener('vite:preloadError', (event) => {
-  event.preventDefault();
-
-  const storageKey = 'vite-preload-recovered';
-  if (!sessionStorage.getItem(storageKey)) {
-    sessionStorage.setItem(storageKey, '1');
-    window.location.reload();
-  }
-});
 
 const rootEl = document.getElementById('root')!;
 const root = ReactDOM.createRoot(rootEl);
@@ -45,15 +36,8 @@ window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
   renderError((e.reason && (e.reason as any).message) || e.reason || 'Unhandled rejection');
 });
 
-// Dynamically import App after ensuring refresh globals exist
-import('./App')
-  .then((mod) => {
-    try {
-      sessionStorage.removeItem('vite-preload-recovered');
-      const Comp = mod.default;
-      root.render(React.createElement(Comp));
-    } catch (err) {
-      renderError(err);
-    }
-  })
-  .catch((err) => renderError(err));
+try {
+  root.render(React.createElement(App));
+} catch (err) {
+  renderError(err);
+}
