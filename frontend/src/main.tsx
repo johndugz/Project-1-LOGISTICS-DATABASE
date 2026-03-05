@@ -5,6 +5,16 @@ import ReactDOM from 'react-dom/client';
 (window as any).$RefreshReg$ = (window as any).$RefreshReg$ || (() => {});
 (window as any).$RefreshSig$ = (window as any).$RefreshSig$ || (() => (type: any) => type);
 
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault();
+
+  const storageKey = 'vite-preload-recovered';
+  if (!sessionStorage.getItem(storageKey)) {
+    sessionStorage.setItem(storageKey, '1');
+    window.location.reload();
+  }
+});
+
 const rootEl = document.getElementById('root')!;
 const root = ReactDOM.createRoot(rootEl);
 
@@ -39,6 +49,7 @@ window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
 import('./App')
   .then((mod) => {
     try {
+      sessionStorage.removeItem('vite-preload-recovered');
       const Comp = mod.default;
       root.render(React.createElement(Comp));
     } catch (err) {
