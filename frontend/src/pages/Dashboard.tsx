@@ -239,6 +239,21 @@ const Dashboard: React.FC = () => {
   const [lastNotificationAt, setLastNotificationAt] = useState<string | null>(null);
   const [pendingOpenShipmentId, setPendingOpenShipmentId] = useState<string | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const activityNotificationDedupRef = useRef<Map<string, number>>(new Map());
+
+  const addActivityNotification = useCallback((notification: ActivityNotification): void => {
+    const dedupKey = `${notification.type}|${notification.shipmentId || ''}|${notification.message}`;
+    const now = Date.now();
+    const lastSeenAt = activityNotificationDedupRef.current.get(dedupKey);
+
+    if (lastSeenAt && now - lastSeenAt < 4000) {
+      return;
+    }
+
+    activityNotificationDedupRef.current.set(dedupKey, now);
+    setActivityNotifications((prev) => [notification, ...prev].slice(0, 20));
+    setLastNotificationAt(notification.createdAt || new Date().toISOString());
+  }, []);
 
   const shipmentSummary = useMemo(() => {
     const counts = {
@@ -405,8 +420,7 @@ const Dashboard: React.FC = () => {
       });
 
       socket.on('admin-activity-notification', (notification: ActivityNotification) => {
-        setActivityNotifications((prev) => [notification, ...prev].slice(0, 20));
-        setLastNotificationAt(notification.createdAt || new Date().toISOString());
+        addActivityNotification(notification);
       });
     }
 
@@ -414,14 +428,13 @@ const Dashboard: React.FC = () => {
       if (notification.type === 'new_user') {
         return;
       }
-      setActivityNotifications((prev) => [notification, ...prev].slice(0, 20));
-      setLastNotificationAt(notification.createdAt || new Date().toISOString());
+      addActivityNotification(notification);
     });
 
     return () => {
       socket.disconnect();
     };
-  }, [isAdmin, canManage, token, loadPendingApprovals]);
+  }, [isAdmin, canManage, token, loadPendingApprovals, addActivityNotification]);
 
   useEffect(() => {
     if (!pendingOpenShipmentId) return;
@@ -600,8 +613,7 @@ const Dashboard: React.FC = () => {
         createdAt: new Date().toISOString(),
         shipmentId,
       };
-      setActivityNotifications((prev) => [localNotification, ...prev].slice(0, 20));
-      setLastNotificationAt(localNotification.createdAt);
+      addActivityNotification(localNotification);
 
       const refreshed = (await apiService.getShipment(shipmentId)) as unknown as ShipmentDetailsResponse;
       setDetailsByShipment((prev) => ({ ...prev, [shipmentId]: refreshed }));
